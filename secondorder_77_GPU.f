@@ -275,10 +275,8 @@ c--------------------------------------
       cur = 1
       
       ! evolve state
-C$OMP PARALLEL DEFAULT(SHARED)
-C$OMP& PRIVATE(ts,t2,x,ii,PROB,s1,s2,s3,s4,s5,s6,s7,
-C$OMP&         m1,m2,m3,m4,m5,m6,m7,xx,curp)
-
+C$OMP TARGET DATA MAP(TO:A(0:2097151))
+C$OMP& MAP(ALLOC:B(0:2097151),PSI_IN(0:2097151))
       curp = cur
       do ts = 1,total_ts
          t2 = t1 + del_t
@@ -293,7 +291,10 @@ C$OMP&         m1,m2,m3,m4,m5,m6,m7,xx,curp)
          if (MOD(ts,data_interval) .EQ. 0) then
 
             ! back into original basis
-C$OMP DO SCHEDULE(STATIC)   
+C$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO
+C$OMP& MAP(TOFROM:A,B,PSI_IN)
+C$OMP& PRIVATE(s1,s2,s3,s4,s5,s6,s7)
+C$OMP& PRIVATE(m1,m2,m3,m4,m5,m6,m7,xx)
             do x = 0,2**(3*j)-1
                s1 = IAND(x,1)
                s2 = IAND(ISHFT(x,-1),1)
@@ -336,9 +337,9 @@ C$OMP DO SCHEDULE(STATIC)
                end if
 
             end do
-C$OMP END DO
+C$OMP END TARGET TEAMS DISTRIBUTE PARALLEL DO
+C$OMP TARGET UPDATE FROM(PSI_IN(0:2097151))
 
-C$OMP SINGLE
             write (6,*) "config: ", m, "t: ", t2
             do ii = 1, j
                 CALL find_prob(PSI_IN,j,k,ii,1,PROB)
@@ -353,14 +354,11 @@ C$OMP SINGLE
 
             write(30,*) t2*1e6, P(1)
             cnt = cnt + 1
-C$OMP END SINGLE
          end if
-C$OMP SINGLE
          t1 = t1 + del_t  
-C$OMP END SINGLE
             
       end do
-C$OMP END PARALLEL
+C$OMP END TARGET DATA
 
       close(11)
 
@@ -415,7 +413,12 @@ C===================================================================
   100 CONTINUE
 
       if (cur .EQ. 1) then
-C$OMP DO PRIVATE(x,a0,a1,o0,o1) SCHEDULE(STATIC)
+
+
+C$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO
+C$OMP& MAP(TO:SIG)
+C$OMP& MAP(TOFROM:A,B)
+C$OMP& PRIVATE(x,a0,a1,o0,o1)
          do x = 0,1048575
             a0 = A(2*x)
             a1 = A(2*x+1)
@@ -426,9 +429,13 @@ C$OMP DO PRIVATE(x,a0,a1,o0,o1) SCHEDULE(STATIC)
             A(2*x)   = o0
             A(2*x+1) = o1
          end do
-C$OMP END DO
+C$OMP END TARGET TEAMS DISTRIBUTE PARALLEL DO
       else
-C$OMP DO PRIVATE(x,a0,a1,o0,o1) SCHEDULE(STATIC)
+
+C$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO
+C$OMP& MAP(TO:SIG)
+C$OMP& MAP(TOFROM:A,B)
+C$OMP& PRIVATE(x,a0,a1,o0,o1)
          do x = 0,1048575
             a0 = B(2*x)
             a1 = B(2*x+1)
@@ -439,7 +446,7 @@ C$OMP DO PRIVATE(x,a0,a1,o0,o1) SCHEDULE(STATIC)
             B(2*x)   = o0
             B(2*x+1) = o1
          end do
-C$OMP END DO
+C$OMP END TARGET TEAMS DISTRIBUTE PARALLEL DO
       end if
 
       return      
@@ -450,8 +457,10 @@ C$OMP END DO
       COMPLEX*16 A(0:2097151),B(0:2097151),OUTP(0:1),SIG(0:1,0:1)
       COMPLEX*16 a0,a1
 
-C$OMP DO PRIVATE(x,a0,a1,OUTP,s_swap,diff,xx)
-C$OMP& SCHEDULE(STATIC)
+C$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO
+C$OMP& MAP(TO:SIG)
+C$OMP& MAP(TOFROM:A,B)
+C$OMP& PRIVATE(x,a0,a1,OUTP,s_swap,diff,xx)
       do x=0,1048575
             a0 = A(2*x); a1 = A(2*x+1)
             OUTP(0) = SIG(0,0)*a0 + SIG(0,1)*a1
@@ -465,7 +474,7 @@ C$OMP& SCHEDULE(STATIC)
             B(xx) = OUTP(0)
             B(xx+2**(z)) = OUTP(1);
       end do
-C$OMP END DO
+C$OMP END TARGET TEAMS DISTRIBUTE PARALLEL DO
       return
       end
 
@@ -509,9 +518,12 @@ C=================================================================
       COMPLEX*16 A(0:2097151),B(0:2097151),hc(0:1,j)
       COMPLEX*16 output,sz_phases
       
-C$OMP DO SCHEDULE(STATIC)
-C$OMP& PRIVATE(x,output,xx)
-C$OMP& PRIVATE(s2,s3,s4,s5,s6,s7,m1,m2,m3,m4,m5,m6,m7)
+C$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO
+C$OMP& MAP(TO:hc)
+C$OMP& MAP(TOFROM:A,B)
+C$OMP& PRIVATE(output,sz_phases,ion,sbit,xx)
+C$OMP& PRIVATE(s1,s2,s3,s4,s5,s6,s7)
+C$OMP& PRIVATE(m1,m2,m3,m4,m5,m6,m7)
       do x=0,2097151
           sz_phases = (1.d0,0.d0)
   
@@ -562,7 +574,7 @@ C$OMP& PRIVATE(s2,s3,s4,s5,s6,s7,m1,m2,m3,m4,m5,m6,m7)
 
          B(xx) = output
       enddo
-C$OMP END DO
+C$OMP END TARGET TEAMS DISTRIBUTE PARALLEL DO
       return
       end
 
@@ -745,8 +757,14 @@ C     PARALLEL
       COMPLEX*16 A(0:2097151),B(0:2097151),EVEN(0:7,0:7),
      .           ODD(0:7,0:7)
       COMPLEX*16 o0,o1,o2,o3,o4,o5,o6,o7,n0,n1,n2,n3,n4,n5,n6,n7
-C$OMP DO PRIVATE(x)
-C$OMP& SCHEDULE(STATIC)
+
+
+C$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO
+C$OMP& MAP(TO:EVEN,ODD)
+C$OMP& MAP(TOFROM:A,B)
+C$OMP& PRIVATE(x,xx,state,m_swap,diff)
+C$OMP& PRIVATE(o0,o1,o2,o3,o4,o5,o6,o7)
+C$OMP& PRIVATE(n0,n1,n2,n3,n4,n5,n6,n7)
       do x=0,262143
         o0 = A(8*x); o1 = A(8*x+1);
         o2 = A(8*x+2); o3 = A(8*x+3)
@@ -792,7 +810,7 @@ C$OMP& SCHEDULE(STATIC)
         CALL swap_helper1(7,x,z,n7,B)    
 
       end do
-C$OMP END DO
+C$OMP END TARGET TEAMS DISTRIBUTE PARALLEL DO
       
       return
       end
@@ -800,7 +818,7 @@ C$OMP END DO
       subroutine swap_helper1(n,x,z,res,B)
       INTEGER m_swap,diff,n,z,x,xx
       COMPLEX*16 B(0:2097151),res
-
+C$OMP DECLARE TARGET
       m_swap = IAND(ISHFT(8*x+n,-(3*z)),3)
       diff = IEOR(m_swap, IAND(n,3))
       xx = IEOR(8*x+n, IOR(ISHFT(diff, 3*z), ISHFT(diff, 0)))
@@ -814,8 +832,12 @@ C$OMP END DO
       COMPLEX*16 A(0:2097151),B(0:2097151),EVEN(0:7,0:7),ODD(0:7,0:7),
      .           o0,o1,o2,o3,o4,o5,o6,o7,n0,n1,n2,n3,n4,n5,n6,n7
 
-C$OMP DO PRIVATE(x)
-C$OMP& SCHEDULE(STATIC)
+C$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO
+C$OMP& MAP(TO:EVEN,ODD)
+C$OMP& MAP(TOFROM:A,B)
+C$OMP& PRIVATE(x,xx,state,m_swap,diff)
+C$OMP& PRIVATE(o0,o1,o2,o3,o4,o5,o6,o7)
+C$OMP& PRIVATE(n0,n1,n2,n3,n4,n5,n6,n7)
       do x=0,262143
         o0 = A(8*x); o1 = A(8*x+1);
         o2 = A(8*x+2); o3 = A(8*x+3)
@@ -861,7 +883,7 @@ C$OMP& SCHEDULE(STATIC)
         CALL swap_helper2(7,x,y,B,n7)
 
       end do 
-C$OMP END DO
+C$OMP END TARGET TEAMS DISTRIBUTE PARALLEL DO
 
       return
       end
@@ -869,7 +891,7 @@ C$OMP END DO
       subroutine swap_helper2(n,x,y,B,res)
       INTEGER state,y,n,m_swap1,m_swap2,diff,xx,x
       COMPLEX*16 B(0:2097151),res
-
+C$OMP DECLARE TARGET
       state = 8*x+n
       m_swap1 = IAND(ISHFT(state,-(3*y+2)),1)
       m_swap2 = IAND(ISHFT(state,-2),1)
@@ -884,12 +906,13 @@ C$OMP END DO
       return
       end
 
-
       subroutine to_spin_only(A,B,EVEN,ODD)
       INTEGER x,xx,y,state,m1,m2,m3,m4,m5,m6,m7,s1,s2,s3,s4,s5,s6,s7
       COMPLEX*16 A(0:2097151),B(0:2097151),OUTP(0:7),NOUTP(0:7),
      .           EVEN(0:7,0:7),ODD(0:7,0:7)
-C$OMP DO SCHEDULE(STATIC)
+C$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO
+C$OMP& MAP(TO:EVEN,ODD)
+C$OMP& MAP(TOFROM:A,B)
 C$OMP& PRIVATE(x,y,state,xx,OUTP,NOUTP)
 C$OMP& PRIVATE(m1,m2,m3,m4,m5,m6,m7,s1,s2,s3,s4,s5,s6,s7)
       do x=0,262143
@@ -965,7 +988,7 @@ C$OMP& PRIVATE(m1,m2,m3,m4,m5,m6,m7,s1,s2,s3,s4,s5,s6,s7)
 
            
       end do
-C$OMP END DO
+C$OMP END TARGET TEAMS DISTRIBUTE PARALLEL DO
 
       return
       end
