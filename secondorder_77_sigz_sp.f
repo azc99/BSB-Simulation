@@ -88,7 +88,7 @@ c---- Get configuration number from command line
       IMPLICIT NONE
       INTEGER j,k,x,y,z,ii,iii,m,ts,total_ts,ion
       COMPLEX*16 PSI_IN(0:2**j*4**k-1),A(0:2**j*4**k-1)
-     .           ,B(0:2**j*4**k-1),i,sz_phases(0:j-1),hc(0:1,0:j)
+     .           ,B(0:2**j*4**k-1),i
       DOUBLE PRECISION LD(j,k),pi,MODE(k,4),
      .                 SPIN(j,2),tau,P(j),PROB
       INTEGER rate,low,high,driving_mode,cnt,num_points,
@@ -209,35 +209,6 @@ c--- set to proper units
       wqbt(7) = wqbt(7) * (10**6)
 c--------------------------------------
        
-
-C===========================================================
-C                Precompute sigma z coefficients
-C===========================================================
-
-
-      sz_phases = (1.d0,0.d0)
-
-      do ion=1,j
-
-         pm = -5.d-1*i*RABI(ion)*RABI(ion)*
-     .      (2.d0*i*(sin(wj*t2 - wj*t1) - wj*t2 + wj*t1))
-     .      / (wj**2)   
-         hc(0,z) = exp(-i*pm)
-         hc(1,z) = exp(i*pm)   
-      end do
-
-      do z = 0,2**j-4**k-1
-         do ion = 1,j
-            sbit = IAND(ISHFT(x,-(ion-1)),1)
-            if (sbit .EQ. 0) then
-               sz_phases(z) = sz_phases(z) * hc(0,ion)
-            else
-               sz_phases(z) = sz_phases(z) * hc(1,ion)
-            end if   
-         end do   
-      end do
-
-c===========================================================
 
       total_ts = NINT(tau/del_t)
       write (6,*) "total timesteps: ", total_ts
@@ -507,106 +478,70 @@ C=================================================================
       IMPLICIT NONE
       INTEGER j,k,x,z,ion,cur
       DOUBLE PRECISION t2,t1,RABI(j),w(j),wqbt(j),w_k(k),wj
-      COMPLEX*16 i,pm,H(0:1,0:1),hc1,hc2
+      COMPLEX*16 i,pm,hc(0:1,j)
       COMPLEX*16 A(0:2097151),B(0:2097151)
 
       i = (0.d0,1.d0)
 
-      do z = 1,j
-         
-         ion = j-z+1
-            
-      
+      do ion=1,j
          wj = wqbt(ion) - w(ion)
-
          pm = -5.d-1*i*RABI(ion)*RABI(ion)*
      .      (2.d0*i*(sin(wj*t2 - wj*t1) - wj*t2 + wj*t1))
      .      / (wj**2)
-
-
-         hc1 = exp(-i*pm)
-         hc2 = exp(i*pm)
-            
-         if (z .EQ. j) GOTO 100            
-   
-         if (cur .EQ. 1) then
-            CALL x_sigma_z(j-z,A,B,hc1,hc2)
-         else
-            CALL x_sigma_z(j-z,B,A,hc1,hc2)
-         end if
-         cur = IEOR(cur,1)
-
+         hc(0,ion) = exp(-i*pm)
+         hc(1,ion) = exp(i*pm)
       end do
-  100 CONTINUE
 
-         if (cur .EQ. 1) then
-            CALL to_spin_mode(A,B,hc1,hc2)
-         else
-            CALL to_spin_mode(B,A,hc1,hc2)
-         end if
-         cur = IEOR(cur,1)
+
+      if (cur .EQ. 1) then
+         CALL to_spin_mode(j,k,A,B,hc)
+      else
+         CALL to_spin_mode(j,k,B,A,hc)
+      end if
+      cur = IEOR(cur,1)
 
       return
       end
 
-
-      subroutine x_sigma_z(z,A,B,hc1,hc2)
-      INTEGER z,x,s_swap,diff,xx
-      COMPLEX*16 A(0:2097151),B(0:2097151),o0,o1,hc1,hc2
-      COMPLEX*16 a0,a1
-C$OMP DO PRIVATE(x,a0,a1,o0,o1,s_swap,diff,xx)
-C$OMP& SCHEDULE(STATIC)
-
-      do x = 0,1048575
-         a0 = A(2*x); a1 = A(2*x+1)
-         o0 = hc1*a0
-         o1 = hc2*a1
-      
-         s_swap = IAND(ISHFT(2*x,-z),1)
-         diff = IEOR(s_swap,0)
-         xx = IEOR(2*x, IOR(ISHFT(diff,z), diff))
-
-         B(xx) = o0
-         B(xx+2**(z)) = o1
-
-      end do
-C$OMP END DO
-      return
-      end
-      
-
-      subroutine to_spin_mode(A,B,hc1,hc2)
-      INTEGER z,x,s7,s6,s5,s4,s3,s2,m7,m6,m5,m4,m3,m2,m1,state,xx
-      COMPLEX*16 A(0:2097151),B(0:2097151),OUTP(0:1),hc1,hc2
-      COMPLEX*16 a0,a1
+      subroutine to_spin_mode(j,k,A,B,hc)
+      INTEGER z,x,s7,s6,s5,s4,s3,s2,s1,m7,m6,m5,m4,m3,m2,m1,state,xx
+      INTEGER ion,sbit,j,k,m
+      COMPLEX*16 A(0:2097151),B(0:2097151),hc(0:1,j)
+      COMPLEX*16 output,sz_phases
       
 C$OMP DO SCHEDULE(STATIC)
-C$OMP& PRIVATE(x,a0,a1,OUTP,state,xx)
+C$OMP& PRIVATE(x,output,xx)
 C$OMP& PRIVATE(s2,s3,s4,s5,s6,s7,m1,m2,m3,m4,m5,m6,m7)
-      do x=0,1048575
-         
-         a0 = A(2*x)
-         a1 = A(2*x+1)
+      do x=0,2097151
+          sz_phases = (1.d0,0.d0)
+  
+          do ion = 1,j
+            sbit = IAND(ISHFT(x,-(ion-1)),1)
+            if (sbit .EQ. 0) then
+               sz_phases = sz_phases * hc(0,MOD(k+ion-2,k)+1)
+            else
+               sz_phases = sz_phases * hc(1,MOD(k+ion-2,k)+1)
+            end if
+         end do
+     
+        
+         output = A(x)*sz_phases 
 
-         OUTP(0) = hc1*a0
-         OUTP(1) = hc2*a1
+         s7 = IAND(x,1)   
+         s1 = IAND(ISHFT(x, -1) ,1)
+         s2 = IAND(ISHFT(x, -2), 1)
+         s3 = IAND(ISHFT(x, -3), 1)
+         s4 = IAND(ISHFT(x, -4), 1)
+         s5 = IAND(ISHFT(x, -5), 1)
+         s6 = IAND(ISHFT(x, -6), 1)         
 
-         state = 2*x
-
-         s2 = IAND(ISHFT(state, -1) ,1)
-         s3 = IAND(ISHFT(state, -2), 1)
-         s4 = IAND(ISHFT(state, -3), 1)
-         s5 = IAND(ISHFT(state, -4), 1)
-         s6 = IAND(ISHFT(state, -5), 1)
-         s7 = IAND(ISHFT(state, -6), 1)         
-
-         m7 = IAND(ISHFT(state, -7), 3)   
-         m6 = IAND(ISHFT(state, -9), 3)              
-         m5 = IAND(ISHFT(state, -11), 3)
-         m4 = IAND(ISHFT(state, -13), 3)
-         m3 = IAND(ISHFT(state, -15), 3)
-         m2 = IAND(ISHFT(state, -17), 3)
-         m1 = IAND(ISHFT(state, -19), 3)
+         m7 = IAND(ISHFT(x, -7), 3)   
+         m6 = IAND(ISHFT(x, -9), 3)              
+         m5 = IAND(ISHFT(x, -11), 3)
+         m4 = IAND(ISHFT(x, -13), 3)
+         m3 = IAND(ISHFT(x, -15), 3)
+         m2 = IAND(ISHFT(x, -17), 3)
+         m1 = IAND(ISHFT(x, -19), 3)
 
          xx = 0
          xx = IOR(xx, ISHFT(s7,20)) 
@@ -617,16 +552,15 @@ C$OMP& PRIVATE(s2,s3,s4,s5,s6,s7,m1,m2,m3,m4,m5,m6,m7)
          xx = IOR(xx, ISHFT(m5,12))
          xx = IOR(xx, ISHFT(s4,11))
          xx = IOR(xx, ISHFT(m4,9))
-         xx = IOR(xx, ISHFT(s3, 8))
-         xx = IOR(xx, ISHFT(m3, 6))
+         xx = IOR(xx, ISHFT(s3,8))
+         xx = IOR(xx, ISHFT(m3,6))
          xx = IOR(xx, ISHFT(s2,5))
          xx = IOR(xx, ISHFT(m2,3))
-c         xx = IOR(xx, ISHFT(s1,2))
+         xx = IOR(xx, ISHFT(s1,2))
          xx = IOR(xx, m1)
 
 
-      B(xx) = OUTP(0)
-      B(xx + 4) = OUTP(1)
+         B(xx) = output
       enddo
 C$OMP END DO
       return
@@ -641,7 +575,7 @@ c===============================================================
 
       subroutine spin_mode(j,k,m,cur,A,B,t2,t1,LD,RABI,w,wqbt,w_k)
       IMPLICIT NONE
-      INTEGER j,k,x,y,z,ion,mode,xx,ii,cur,m,s_c,s_b,s_a,state
+      INTEGER j,k,x,y,z,ion,mode,xx,ii,cur,m,s_c,s_b,s_a,tate
       INTEGER spin_order(j,k),swap(12,3),s(j),m1,m2,m3,m_swap1,m_swap2
       INTEGER counter,m_swap,diff,spin_order2(j,k)
       DOUBLE PRECISION wj,w(j),w_k(k),RABI(j),LD(j,k),wqbt(j),t2,t1
